@@ -1,79 +1,63 @@
-import random
 import cv2
+import mediapipe as mp
+from utils.snake import SnakeGame
 
-class SnakeGame:
-    def __init__(self, width=640, height=480):
-        self.width = width
-        self.height = height
-        self.block_size = 20
-        self.reset()
-        self.auto_play = True  # Auto-play mode
+# Mediapipe setup
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(max_num_hands=1)
+mp_draw = mp.solutions.drawing_utils
 
-    def toggle_auto_play(self):
-        self.auto_play = not self.auto_play
+# Webcam
+cap = cv2.VideoCapture(0)
 
-    def reset(self):
-        self.snake = [(100, 100)]
-        self.direction = (self.block_size, 0)
-        self.food = self.place_food()
-        self.score = 0
-        self.game_over = False
+# Snake Game instance
+game = SnakeGame()
 
-    def place_food(self):
-        x = random.randint(0, (self.width - self.block_size) // self.block_size) * self.block_size
-        y = random.randint(0, (self.height - self.block_size) // self.block_size) * self.block_size
-        return (x, y)
+# Smoothening setup
+smoothening = 0.2
+prev_x, prev_y = 0, 0
 
-    def update(self, input_pos, frame):
-        if self.game_over:
-            cv2.putText(frame, "Game Over! Press 'R' to restart.", (100, 200),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
-            return frame
+while True:
+    success, frame = cap.read()
+    frame = cv2.flip(frame, 1)
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(rgb)
 
-        # Auto-play logic
-        if self.auto_play:
-            current_head = self.snake[0]
-            dx = self.food[0] - current_head[0]
-            dy = self.food[1] - current_head[1]
+    if results.multi_hand_landmarks:
+        for handLms in results.multi_hand_landmarks:
+            for id, lm in enumerate(handLms.landmark):
+                h, w, c = frame.shape
+                cx, cy = int(lm.x * w), int(lm.y * h)
 
-            step_x = self.block_size if dx > 0 else -self.block_size if dx < 0 else 0
-            step_y = self.block_size if dy > 0 else -self.block_size if dy < 0 else 0
+                if id == 8:  # Index fingertip
+                    # Smooth coordinates
+                    smoothed_x = int(prev_x + (cx - prev_x) * smoothening)
+                    smoothed_y = int(prev_y + (cy - prev_y) * smoothening)
+                    prev_x, prev_y = smoothed_x, smoothed_y
 
-            head = (current_head[0] + step_x, current_head[1] + step_y)
-        else:
-            head = input_pos
+                    # Draw fingertip
+                    cv2.circle(frame, (smoothed_x, smoothed_y), 15, (0, 255, 0), cv2.FILLED)
+                    cv2.putText(frame, f'Index: {smoothed_x},{smoothed_y}', (smoothed_x+20, smoothed_y),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
 
-        head = (head[0] // self.block_size * self.block_size, head[1] // self.block_size * self.block_size)
-        self.snake.insert(0, head)
+                    # Update snake game with smoothed finger position
+                    frame = game.update((smoothed_x, smoothed_y), frame)
 
-        # Eat food
-        if abs(head[0] - self.food[0]) < self.block_size and abs(head[1] - self.food[1]) < self.block_size:
-            self.score += 1
-            self.food = self.place_food()
-        else:
-            self.snake.pop()
+            # Draw hand landmarks
+            mp_draw.draw_landmarks(frame, handLms, mp_hands.HAND_CONNECTIONS)
 
-        # Collision with self
-        if head in self.snake[1:]:
-            self.game_over = True
+    else:
+        # If hand is not detected, still show Game Over message
+        if game.game_over:
+            frame = game.update((prev_x, prev_y), frame)
 
-        # Collision with wall
-        if head[0] < 0 or head[0] >= self.width or head[1] < 0 or head[1] >= self.height:
-            self.game_over = True
+    cv2.imshow("Snake Game - Hand Controlled", frame)
 
-        # Draw snake
-        for segment in self.snake:
-            cv2.rectangle(frame, segment,
-                          (segment[0] + self.block_size, segment[1] + self.block_size),
-                          (0, 255, 0), -1)
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('q'):
+        break
+    elif key == ord('r'):
+        game.reset()
 
-        # Draw food
-        cv2.circle(frame, (self.food[0] + self.block_size // 2, self.food[1] + self.block_size // 2),
-                   self.block_size // 2, (0, 0, 255), -1)
-
-        # Score
-        mode = "AUTO" if self.auto_play else "HAND"
-        cv2.putText(frame, f"Mode: {mode} | Score: {self.score}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-
-        return frame
+cap.release()
+cv2.destroyAllWindows()
